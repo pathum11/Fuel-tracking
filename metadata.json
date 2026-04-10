@@ -1,0 +1,5 @@
+{
+  "name": "FuelWise (ඉන්ධන ගණකය)",
+  "description": "දිනපතා ඉන්ධන පරිභෝජනය සහ පිරිවැය ගණනය කිරීමට උපකාරී වන සරල ඇප් එකකි.",
+  "requestFramePermissions": ["geolocation"]
+}
