@@ -7,6 +7,31 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Fuel, Route, CircleDollarSign, Calendar, Info, RefreshCcw, Navigation, StopCircle, PlayCircle, AlertTriangle } from 'lucide-react';
 
+// Safe localStorage helper
+const storage = {
+  get: (key: string, fallback: string) => {
+    try {
+      return localStorage.getItem(key) || fallback;
+    } catch (e) {
+      return fallback;
+    }
+  },
+  set: (key: string, value: string) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      // Ignore
+    }
+  },
+  clear: () => {
+    try {
+      localStorage.clear();
+    } catch (e) {
+      // Ignore
+    }
+  }
+};
+
 // Haversine formula to calculate distance between two points in km
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371; // Radius of the earth in km
@@ -26,13 +51,13 @@ function deg2rad(deg: number) {
 }
 
 export default function App() {
-  const [distance, setDistance] = useState<string>(() => localStorage.getItem('fuelwise_distance') || '20');
-  const [efficiency, setEfficiency] = useState<string>(() => localStorage.getItem('fuelwise_efficiency') || '15');
-  const [price, setPrice] = useState<string>(() => localStorage.getItem('fuelwise_price') || '370');
+  const [distance, setDistance] = useState<string>(() => storage.get('fuelwise_distance', '20'));
+  const [efficiency, setEfficiency] = useState<string>(() => storage.get('fuelwise_efficiency', '15'));
+  const [price, setPrice] = useState<string>(() => storage.get('fuelwise_price', '370'));
   
   // Live tracking states
-  const [isTracking, setIsTracking] = useState(() => localStorage.getItem('fuelwise_isTracking') === 'true');
-  const [liveDistance, setLiveDistance] = useState(() => parseFloat(localStorage.getItem('fuelwise_liveDistance') || '0'));
+  const [isTracking, setIsTracking] = useState(() => storage.get('fuelwise_isTracking', 'false') === 'true');
+  const [liveDistance, setLiveDistance] = useState(() => parseFloat(storage.get('fuelwise_liveDistance', '0')));
   const lastPosition = useRef<{ lat: number; lon: number } | null>(null);
   const watchId = useRef<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -45,15 +70,15 @@ export default function App() {
 
   // Persist settings
   useEffect(() => {
-    localStorage.setItem('fuelwise_distance', distance);
-    localStorage.setItem('fuelwise_efficiency', efficiency);
-    localStorage.setItem('fuelwise_price', price);
+    storage.set('fuelwise_distance', distance);
+    storage.set('fuelwise_efficiency', efficiency);
+    storage.set('fuelwise_price', price);
   }, [distance, efficiency, price]);
 
   // Persist tracking state
   useEffect(() => {
-    localStorage.setItem('fuelwise_isTracking', isTracking.toString());
-    localStorage.setItem('fuelwise_liveDistance', liveDistance.toString());
+    storage.set('fuelwise_isTracking', isTracking.toString());
+    storage.set('fuelwise_liveDistance', liveDistance.toString());
   }, [isTracking, liveDistance]);
 
   // Handle calculations
@@ -131,7 +156,7 @@ export default function App() {
           if (dist > 0.005) {
             setLiveDistance(prev => {
               const newDist = prev + dist;
-              localStorage.setItem('fuelwise_liveDistance', newDist.toString());
+              storage.set('fuelwise_liveDistance', newDist.toString());
               return newDist;
             });
             lastPosition.current = { lat: latitude, lon: longitude };
@@ -179,7 +204,7 @@ export default function App() {
       setPrice('370');
       setLiveDistance(0);
       if (isTracking) stopTracking();
-      localStorage.clear();
+      storage.clear();
     }
   };
 
