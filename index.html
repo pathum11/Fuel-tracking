@@ -1,536 +1,220 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+<!DOCTYPE html>
+<html lang="si">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuelWise - ඉන්ධන පිරිවැය ගණකය</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f5f5f0; }
+        .result-card { transition: all 0.3s ease; }
+        .tracking-active { background-color: #fef2f2; border-color: #fee2e2; }
+    </style>
+</head>
+<body class="text-[#1a1a1a] pb-20">
+    <!-- Silent Audio for Background Persistence -->
+    <audio id="bgAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
 
-import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Fuel, Route, CircleDollarSign, Calendar, Info, RefreshCcw, Navigation, StopCircle, PlayCircle, AlertTriangle, Save, Trash2, History as HistoryIcon } from 'lucide-react';
-
-// Safe localStorage helper
-const storage = {
-  get: (key: string, fallback: string) => {
-    try {
-      return localStorage.getItem(key) || fallback;
-    } catch (e) {
-      return fallback;
-    }
-  },
-  set: (key: string, value: string) => {
-    try {
-      localStorage.setItem(key, value);
-    } catch (e) {
-      // Ignore
-    }
-  },
-  clear: () => {
-    try {
-      localStorage.clear();
-    } catch (e) {
-      // Ignore
-    }
-  }
-};
-
-interface HistoryEntry {
-  id: string;
-  date: string;
-  distance: number;
-  fuel: number;
-  cost: number;
-}
-
-// Haversine formula to calculate distance between two points in km
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // Radius of the earth in km
-  const dLat = deg2rad(lat2 - lat1);
-  const dLon = deg2rad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const d = R * c; // Distance in km
-  return d;
-}
-
-function deg2rad(deg: number) {
-  return deg * (Math.PI / 180);
-}
-
-export default function App() {
-  const [distance, setDistance] = useState<string>(() => storage.get('fuelwise_distance', '20'));
-  const [efficiency, setEfficiency] = useState<string>(() => storage.get('fuelwise_efficiency', '15'));
-  const [price, setPrice] = useState<string>(() => storage.get('fuelwise_price', '370'));
-  
-  // Live tracking states
-  const [isTracking, setIsTracking] = useState(() => storage.get('fuelwise_isTracking', 'false') === 'true');
-  const [liveDistance, setLiveDistance] = useState(() => parseFloat(storage.get('fuelwise_liveDistance', '0')));
-  const lastPosition = useRef<{ lat: number; lon: number; timestamp: number } | null>(null);
-  const watchId = useRef<number | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // History state
-  const [history, setHistory] = useState<HistoryEntry[]>(() => {
-    const saved = storage.get('fuelwise_history', '[]');
-    try {
-      return JSON.parse(saved);
-    } catch {
-      return [];
-    }
-  });
-
-  const [results, setResults] = useState({
-    dailyFuel: 0,
-    dailyCost: 0,
-    monthlyCost: 0,
-  });
-
-  // Persist settings
-  useEffect(() => {
-    storage.set('fuelwise_distance', distance);
-    storage.set('fuelwise_efficiency', efficiency);
-    storage.set('fuelwise_price', price);
-  }, [distance, efficiency, price]);
-
-  // Persist tracking state
-  useEffect(() => {
-    storage.set('fuelwise_isTracking', isTracking.toString());
-    storage.set('fuelwise_liveDistance', liveDistance.toString());
-  }, [isTracking, liveDistance]);
-
-  // Persist history
-  useEffect(() => {
-    storage.set('fuelwise_history', JSON.stringify(history));
-  }, [history]);
-
-  // Handle calculations
-  useEffect(() => {
-    const d = isTracking ? liveDistance : (parseFloat(distance) || 0);
-    const e = parseFloat(efficiency) || 0;
-    const p = parseFloat(price) || 0;
-
-    if (e > 0) {
-      const dailyFuel = d / e;
-      const dailyCost = dailyFuel * p;
-      const monthlyCost = dailyCost * 30;
-
-      setResults({
-        dailyFuel,
-        dailyCost,
-        monthlyCost,
-      });
-    } else {
-      setResults({
-        dailyFuel: 0,
-        dailyCost: 0,
-        monthlyCost: 0,
-      });
-    }
-  }, [distance, efficiency, price, liveDistance, isTracking]);
-
-  // Resume tracking on mount if it was active
-  useEffect(() => {
-    if (isTracking && !watchId.current) {
-      startTracking();
-    }
-    return () => {
-      if (watchId.current !== null) {
-        navigator.geolocation.clearWatch(watchId.current);
-      }
-    };
-  }, []);
-
-  const startTracking = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
-      return;
-    }
-
-    if ('wakeLock' in navigator) {
-      (navigator as any).wakeLock.request('screen').catch((err: any) => console.error(err));
-    }
-
-    if (audioRef.current) {
-      audioRef.current.play().catch(e => console.log("Audio play blocked", e));
-    }
-
-    setIsTracking(true);
-    lastPosition.current = null;
-
-    watchId.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const { latitude, longitude, accuracy } = position.coords;
-        const timestamp = position.timestamp;
-        
-        // Filter out low accuracy points (stricter: 50m)
-        if (accuracy > 50) return;
-
-        if (lastPosition.current) {
-          const dist = calculateDistance(
-            lastPosition.current.lat,
-            lastPosition.current.lon,
-            latitude,
-            longitude
-          );
-          
-          const timeDiffHours = (timestamp - lastPosition.current.timestamp) / (1000 * 60 * 60);
-          const speed = timeDiffHours > 0 ? dist / timeDiffHours : 0;
-
-          // NOISE FILTERING LOGIC:
-          // 1. Ignore if speed is less than 2 km/h (likely stationary noise)
-          // 2. Ignore if distance is too small relative to accuracy
-          // 3. Ignore if speed is physically impossible (> 200 km/h)
-          
-          const isSignificantMovement = dist > 0.01; // At least 10 meters
-          const isRealisticSpeed = speed > 2 && speed < 200;
-
-          if (isSignificantMovement && isRealisticSpeed) {
-            setLiveDistance(prev => {
-              const newDist = prev + dist;
-              storage.set('fuelwise_liveDistance', newDist.toString());
-              return newDist;
-            });
-            lastPosition.current = { lat: latitude, lon: longitude, timestamp };
-          }
-        } else {
-          lastPosition.current = { lat: latitude, lon: longitude, timestamp };
-        }
-      },
-      (error) => console.error("Error tracking position:", error),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-  };
-
-  const stopTracking = () => {
-    if (watchId.current !== null) {
-      navigator.geolocation.clearWatch(watchId.current);
-      watchId.current = null;
-    }
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    setIsTracking(false);
-    setDistance(liveDistance.toFixed(2));
-  };
-
-  const toggleTracking = () => {
-    if (isTracking) {
-      stopTracking();
-    } else {
-      setLiveDistance(0);
-      startTracking();
-    }
-  };
-
-  const saveToHistory = () => {
-    const d = isTracking ? liveDistance : parseFloat(distance);
-    if (!d || d <= 0) {
-      alert("කරුණාකර දුර ප්‍රමාණයක් ඇතුළත් කරන්න.");
-      return;
-    }
-
-    const newEntry: HistoryEntry = {
-      id: Date.now().toString(),
-      date: new Date().toLocaleDateString('si-LK', { year: 'numeric', month: 'short', day: 'numeric' }),
-      distance: d,
-      fuel: results.dailyFuel,
-      cost: results.dailyCost,
-    };
-
-    setHistory(prev => [newEntry, ...prev]);
-    if (isTracking) stopTracking();
-    setLiveDistance(0);
-    setDistance('0');
-  };
-
-  const deleteHistoryItem = (id: string) => {
-    setHistory(prev => prev.filter(item => item.id !== id));
-  };
-
-  const clearHistory = () => {
-    if (window.confirm("සම්පූර්ණ ඉතිහාසයම මකා දැමීමට ඔබට අවශ්‍යද?")) {
-      setHistory([]);
-    }
-  };
-
-  const reset = () => {
-    if (window.confirm("ඔබට සියල්ල නැවත සැකසීමට (Reset) අවශ්‍යද?")) {
-      setDistance('20');
-      setEfficiency('15');
-      setPrice('370');
-      setLiveDistance(0);
-      if (isTracking) stopTracking();
-      storage.clear();
-      setHistory([]);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-[#f5f5f0] text-[#1a1a1a] font-sans selection:bg-[#5A5A40] selection:text-white pb-20">
-      <audio ref={audioRef} loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=" />
-
-      <div className="max-w-md mx-auto px-6 py-12">
-        {/* Header */}
-        <header className="mb-10 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="inline-flex items-center justify-center p-3 bg-[#5A5A40] text-white rounded-2xl mb-4 shadow-lg shadow-[#5A5A40]/20"
-          >
-            <Fuel size={28} />
-          </motion.div>
-          <motion.h1
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.1 }}
-            className="text-3xl font-bold tracking-tight mb-2"
-          >
-            FuelWise
-          </motion.h1>
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="text-[#5A5A40] font-medium"
-          >
-            ඉන්ධන පිරිවැය ගණකය
-          </motion.p>
+    <div id="app" class="max-w-md mx-auto px-6 py-12">
+        <!-- Header -->
+        <header class="mb-10 text-center">
+            <div class="inline-flex items-center justify-center p-3 bg-[#5A5A40] text-white rounded-2xl mb-4 shadow-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22L15 22"/><path d="M4 9L4 18"/><path d="M14 22L14 9"/><path d="M4 9C4 6.23858 6.23858 4 9 4C11.7614 4 14 6.23858 14 9"/><path d="M9 12L9 12"/><path d="M18 5V11"/><path d="M21 8L15 8"/></svg>
+            </div>
+            <h1 class="text-3xl font-bold tracking-tight mb-2">FuelWise</h1>
+            <p class="text-[#5A5A40] font-medium">ඉන්ධන පිරිවැය ගණකය</p>
         </header>
 
-        {/* Live Tracking Banner */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`mb-6 p-4 rounded-3xl flex items-center justify-between transition-colors ${
-            isTracking ? 'bg-red-50 border border-red-100 shadow-lg shadow-red-100' : 'bg-[#5A5A40]/5 border border-[#5A5A40]/10'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${isTracking ? 'bg-red-500 text-white animate-pulse' : 'bg-[#5A5A40] text-white'}`}>
-              <Navigation size={18} />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-[#5A5A40] uppercase tracking-wider">Background Tracking</p>
-              <p className="text-sm font-medium">{isTracking ? 'පසුබිමේ ක්‍රියාත්මක වේ...' : 'Live ගණනය ආරම්භ කරන්න'}</p>
-            </div>
-          </div>
-          <button
-            onClick={toggleTracking}
-            className={`flex items-center gap-2 px-4 py-2 rounded-2xl font-bold text-sm transition-all ${
-              isTracking 
-                ? 'bg-red-500 text-white shadow-lg shadow-red-200 hover:bg-red-600' 
-                : 'bg-[#5A5A40] text-white shadow-lg shadow-[#5A5A40]/20 hover:bg-[#4A4A30]'
-            }`}
-          >
-            {isTracking ? <><StopCircle size={16} /> නවත්වන්න</> : <><PlayCircle size={16} /> ආරම්භ කරන්න</>}
-          </button>
-        </motion.div>
-
-        {/* Inputs */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.3 }}
-          className="bg-white rounded-[32px] p-8 shadow-xl shadow-black/5 border border-black/5 mb-8"
-        >
-          <div className="space-y-6">
-            <div>
-              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">
-                <Route size={14} />
-                {isTracking ? 'දැනට දාවනය වූ දුර (කි.මී.)' : 'දිනකට ධාවනය වන දුර (කි.මී.)'}
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={isTracking ? liveDistance.toFixed(2) : distance}
-                  onChange={(e) => !isTracking && setDistance(e.target.value)}
-                  readOnly={isTracking}
-                  className={`w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold focus:ring-2 focus:ring-[#5A5A40] transition-all outline-none ${
-                    isTracking ? 'text-red-600' : ''
-                  }`}
-                  placeholder="0"
-                />
-                <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">km</span>
-              </div>
-            </div>
-
-            <div className={isTracking ? 'opacity-50 pointer-events-none' : ''}>
-              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">
-                <Fuel size={14} />
-                ඉන්ධන කාර්යක්ෂමතාව (කි.මී./ලී.)
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={efficiency}
-                  onChange={(e) => setEfficiency(e.target.value)}
-                  className="w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold focus:ring-2 focus:ring-[#5A5A40] transition-all outline-none"
-                  placeholder="0"
-                />
-                <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">km/L</span>
-              </div>
-            </div>
-
-            <div className={isTracking ? 'opacity-50 pointer-events-none' : ''}>
-              <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">
-                <CircleDollarSign size={14} />
-                ලීටරයක මිල (රු.)
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  className="w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold focus:ring-2 focus:ring-[#5A5A40] transition-all outline-none"
-                  placeholder="0"
-                />
-                <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">Rs.</span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={reset}
-                className="flex-1 flex items-center justify-center gap-2 py-3 text-sm font-bold text-[#5A5A40] hover:bg-[#5A5A40]/5 rounded-2xl transition-colors"
-              >
-                <RefreshCcw size={14} />
-                Reset
-              </button>
-              <button
-                onClick={saveToHistory}
-                className="flex-[2] flex items-center justify-center gap-2 py-3 bg-[#5A5A40] text-white rounded-2xl font-bold shadow-lg shadow-[#5A5A40]/20 hover:bg-[#4A4A30] transition-all"
-              >
-                <Save size={16} />
-                දත්ත සුරකින්න (Save)
-              </button>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Results */}
-        <div className="grid gap-4 mb-12">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key="daily"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="bg-white rounded-3xl p-6 flex items-center justify-between shadow-md border border-black/5"
-            >
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl">
-                  <Fuel size={20} />
+        <!-- Live Tracking Banner -->
+        <div id="trackingBanner" class="mb-6 p-4 rounded-3xl flex items-center justify-between bg-[#5A5A40]/5 border border-[#5A5A40]/10 transition-all">
+            <div class="flex items-center gap-3">
+                <div id="trackingIcon" class="p-2 rounded-xl bg-[#5A5A40] text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
                 </div>
                 <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{isTracking ? 'දැනට වැයවූ ඉන්ධන' : 'දිනකට යන ඉන්ධන'}</p>
-                  <p className="text-lg font-bold">{isTracking ? 'Fuel Used' : 'Daily Fuel'}</p>
+                    <p class="text-xs font-bold text-[#5A5A40] uppercase tracking-wider">Live Tracking</p>
+                    <p id="trackingStatus" class="text-sm font-medium">Live ගණනය ආරම්භ කරන්න</p>
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="text-2xl font-black text-blue-600">{results.dailyFuel.toFixed(2)}</p>
-                <p className="text-xs font-bold text-gray-400 uppercase">Liters</p>
-              </div>
-            </motion.div>
-
-            <motion.div
-              key="cost"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="bg-white rounded-3xl p-6 flex items-center justify-between shadow-md border border-black/5"
-            >
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-green-50 text-green-600 rounded-2xl">
-                  <CircleDollarSign size={20} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{isTracking ? 'දැනට වැයවූ පිරිවැය' : 'දිනකට යන පිරිවැය'}</p>
-                  <p className="text-lg font-bold">{isTracking ? 'Current Cost' : 'Daily Cost'}</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-2xl font-black text-green-600">Rs. {Math.round(results.dailyCost).toLocaleString()}</p>
-                <p className="text-xs font-bold text-gray-400 uppercase">LKR</p>
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* History Section */}
-        <div className="mt-12">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-[#5A5A40]/10 text-[#5A5A40] rounded-xl">
-                <HistoryIcon size={18} />
-              </div>
-              <h2 className="text-xl font-bold">ඉතිහාසය (History)</h2>
             </div>
-            {history.length > 0 && (
-              <button onClick={clearHistory} className="text-xs font-bold text-red-500 hover:text-red-600 flex items-center gap-1">
-                <Trash2 size={12} /> Clear
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-4">
-            {history.length === 0 ? (
-              <div className="text-center py-10 bg-white/50 rounded-[32px] border border-dashed border-[#5A5A40]/20">
-                <p className="text-sm text-[#5A5A40]/50 font-medium">තවමත් දත්ත සුරැකී නොමැත.</p>
-              </div>
-            ) : (
-              history.map((item) => (
-                <motion.div
-                  key={item.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="bg-white rounded-3xl p-5 shadow-sm border border-black/5 flex items-center justify-between group"
-                >
-                  <div className="flex flex-col gap-1">
-                    <p className="text-[10px] font-bold text-[#5A5A40]/60 uppercase tracking-widest">{item.date}</p>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1 text-sm font-bold">
-                        <Route size={12} className="text-gray-400" />
-                        {item.distance.toFixed(1)} km
-                      </div>
-                      <div className="flex items-center gap-1 text-sm font-bold">
-                        <Fuel size={12} className="text-gray-400" />
-                        {item.fuel.toFixed(2)} L
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <p className="text-lg font-black text-[#5A5A40]">Rs. {Math.round(item.cost).toLocaleString()}</p>
-                    </div>
-                    <button 
-                      onClick={() => deleteHistoryItem(item.id)}
-                      className="p-2 text-gray-300 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </motion.div>
-              ))
-            )}
-          </div>
+            <button id="toggleBtn" onclick="toggleTracking()" class="bg-[#5A5A40] text-white px-4 py-2 rounded-2xl font-bold text-sm shadow-lg transition-all">ආරම්භ කරන්න</button>
         </div>
 
-        {/* Footer Info */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
-          className="mt-12 flex items-start gap-3 p-4 bg-white/50 rounded-2xl border border-black/5"
-        >
-          <Info size={16} className="text-[#5A5A40] mt-0.5 shrink-0" />
-          <p className="text-xs text-[#5A5A40]/70 leading-relaxed">
-            {isTracking 
-              ? "සජීවීව ගණනය කිරීමේදී ඔබගේ දුරකථනයේ GPS භාවිතා වේ. හොඳ සංඥා පවතින ස්ථානයක මෙය වඩාත් නිවැරදි වේ."
-              : "දත්ත සුරැකීමට (Save) බොත්තම භාවිතා කරන්න. එවිට ඔබගේ දෛනික වියදම් ඉතිහාසයට එකතු වේ."
-            }
-          </p>
-        </motion.div>
-      </div>
+        <!-- Inputs -->
+        <div class="bg-white rounded-[32px] p-8 shadow-xl mb-8 border border-black/5">
+            <div class="space-y-6">
+                <div>
+                    <label id="distLabel" class="block text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">දිනකට ධාවනය වන දුර (කි.මී.)</label>
+                    <div class="relative">
+                        <input type="number" id="distance" value="20" oninput="calculate()" class="w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold outline-none focus:ring-2 focus:ring-[#5A5A40]">
+                        <span class="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">km</span>
+                    </div>
+                </div>
+                <div id="effGroup">
+                    <label class="block text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">ඉන්ධන කාර්යක්ෂමතාව (කි.මී./ලී.)</label>
+                    <div class="relative">
+                        <input type="number" id="efficiency" value="15" oninput="calculate()" class="w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold outline-none focus:ring-2 focus:ring-[#5A5A40]">
+                        <span class="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">km/L</span>
+                    </div>
+                </div>
+                <div id="priceGroup">
+                    <label class="block text-xs font-bold uppercase tracking-wider text-[#5A5A40] mb-3">ලීටරයක මිල (රු.)</label>
+                    <div class="relative">
+                        <input type="number" id="price" value="370" oninput="calculate()" class="w-full bg-[#f5f5f0] border-none rounded-2xl px-5 py-4 text-lg font-semibold outline-none focus:ring-2 focus:ring-[#5A5A40]">
+                        <span class="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#5A5A40]/50">Rs.</span>
+                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="reset()" class="flex-1 py-3 text-sm font-bold text-[#5A5A40] hover:bg-[#5A5A40]/5 rounded-2xl transition-colors">Reset</button>
+                    <button onclick="saveToHistory()" class="flex-[2] py-3 bg-[#5A5A40] text-white rounded-2xl font-bold shadow-lg">දත්ත සුරකින්න (Save)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div class="grid gap-4 mb-12">
+            <div class="bg-white rounded-3xl p-6 flex items-center justify-between shadow-md border border-black/5">
+                <div class="flex items-center gap-4">
+                    <div class="p-3 bg-blue-50 text-blue-600 rounded-2xl font-bold">L</div>
+                    <div><p class="text-xs font-bold text-gray-400 uppercase">දිනකට යන ඉන්ධන</p><p class="text-lg font-bold">Daily Fuel</p></div>
+                </div>
+                <p id="resFuel" class="text-2xl font-black text-blue-600">0.00</p>
+            </div>
+            <div class="bg-white rounded-3xl p-6 flex items-center justify-between shadow-md border border-black/5">
+                <div class="flex items-center gap-4">
+                    <div class="p-3 bg-green-50 text-green-600 rounded-2xl font-bold">Rs</div>
+                    <div><p class="text-xs font-bold text-gray-400 uppercase">දිනකට යන පිරිවැය</p><p class="text-lg font-bold">Daily Cost</p></div>
+                </div>
+                <p id="resCost" class="text-2xl font-black text-green-600">0</p>
+            </div>
+        </div>
+
+        <!-- History Section -->
+        <div class="mt-12">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-bold">ඉතිහාසය (History)</h2>
+                <button onclick="clearHistory()" class="text-xs font-bold text-red-500">Clear All</button>
+            </div>
+            <div id="historyList" class="space-y-4">
+                <!-- History items will appear here -->
+            </div>
+        </div>
     </div>
-  );
-}
+
+    <script>
+        let isTracking = false;
+        let liveDistance = 0;
+        let watchId = null;
+        let lastPos = null;
+        let history = JSON.parse(localStorage.getItem('fuelwise_history') || '[]');
+
+        function calculate() {
+            const d = isTracking ? liveDistance : parseFloat(document.getElementById('distance').value) || 0;
+            const e = parseFloat(document.getElementById('efficiency').value) || 0;
+            const p = parseFloat(document.getElementById('price').value) || 0;
+            const fuel = e > 0 ? d / e : 0;
+            const cost = fuel * p;
+            document.getElementById('resFuel').innerText = fuel.toFixed(2);
+            document.getElementById('resCost').innerText = Math.round(cost).toLocaleString();
+            return { fuel, cost, distance: d };
+        }
+
+        function toggleTracking() {
+            const btn = document.getElementById('toggleBtn');
+            const status = document.getElementById('trackingStatus');
+            const banner = document.getElementById('trackingBanner');
+            const icon = document.getElementById('trackingIcon');
+            const distInput = document.getElementById('distance');
+            const audio = document.getElementById('bgAudio');
+
+            if (isTracking) {
+                navigator.geolocation.clearWatch(watchId);
+                audio.pause();
+                isTracking = false;
+                btn.innerText = "ආරම්භ කරන්න";
+                btn.className = "bg-[#5A5A40] text-white px-4 py-2 rounded-2xl font-bold text-sm shadow-lg";
+                status.innerText = "Live ගණනය ආරම්භ කරන්න";
+                banner.className = "mb-6 p-4 rounded-3xl flex items-center justify-between bg-[#5A5A40]/5 border border-[#5A5A40]/10";
+                icon.className = "p-2 rounded-xl bg-[#5A5A40] text-white";
+                distInput.readOnly = false;
+                distInput.value = liveDistance.toFixed(2);
+                distInput.classList.remove('text-red-600');
+            } else {
+                liveDistance = 0; lastPos = null; isTracking = true;
+                audio.play().catch(() => {});
+                btn.innerText = "නවත්වන්න";
+                btn.className = "bg-red-500 text-white px-4 py-2 rounded-2xl font-bold text-sm shadow-lg";
+                status.innerText = "දාවනය වෙමින් පවතී...";
+                banner.className = "mb-6 p-4 rounded-3xl flex items-center justify-between bg-red-50 border border-red-100 shadow-lg shadow-red-100";
+                icon.className = "p-2 rounded-xl bg-red-500 text-white animate-pulse";
+                distInput.readOnly = true;
+                distInput.classList.add('text-red-600');
+                
+                watchId = navigator.geolocation.watchPosition(pos => {
+                    const { latitude, longitude, accuracy, timestamp } = pos.coords;
+                    if (accuracy > 50) return;
+                    if (lastPos) {
+                        const d = getDist(lastPos.lat, lastPos.lon, latitude, longitude);
+                        const timeDiff = (pos.timestamp - lastPos.time) / (1000 * 60 * 60);
+                        const speed = timeDiff > 0 ? d / timeDiff : 0;
+                        if (d > 0.01 && speed > 2 && speed < 200) {
+                            liveDistance += d;
+                            distInput.value = liveDistance.toFixed(2);
+                            calculate();
+                            lastPos = { lat: latitude, lon: longitude, time: pos.timestamp };
+                        }
+                    } else { lastPos = { lat: latitude, lon: longitude, time: pos.timestamp }; }
+                }, null, { enableHighAccuracy: true });
+            }
+        }
+
+        function getDist(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2-lat1) * Math.PI / 180;
+            const dLon = (lon2-lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function saveToHistory() {
+            const data = calculate();
+            if (data.distance <= 0) return alert("කරුණාකර දුර ප්‍රමාණයක් ඇතුළත් කරන්න.");
+            const entry = {
+                id: Date.now(),
+                date: new Date().toLocaleDateString('si-LK'),
+                distance: data.distance,
+                fuel: data.fuel,
+                cost: data.cost
+            };
+            history.unshift(entry);
+            localStorage.setItem('fuelwise_history', JSON.stringify(history));
+            renderHistory();
+            if (isTracking) toggleTracking();
+            document.getElementById('distance').value = 0;
+            calculate();
+        }
+
+        function renderHistory() {
+            const list = document.getElementById('historyList');
+            if (history.length === 0) {
+                list.innerHTML = '<p class="text-center text-gray-400 py-10">තවමත් දත්ත සුරැකී නොමැත.</p>';
+                return;
+            }
+            list.innerHTML = history.map(item => `
+                <div class="bg-white rounded-3xl p-5 shadow-sm border border-black/5 flex items-center justify-between">
+                    <div>
+                        <p class="text-[10px] font-bold text-[#5A5A40]/60 uppercase">${item.date}</p>
+                        <p class="text-sm font-bold">${item.distance.toFixed(1)} km | ${item.fuel.toFixed(2)} L</p>
+                    </div>
+                    <p class="text-lg font-black text-[#5A5A40]">Rs. ${Math.round(item.cost).toLocaleString()}</p>
+                </div>
+            `).join('');
+        }
+
+        function clearHistory() { if (confirm("මකා දැමීමට අවශ්‍යද?")) { history = []; localStorage.removeItem('fuelwise_history'); renderHistory(); } }
+        function reset() { if (confirm("Reset කිරීමට අවශ්‍යද?")) { location.reload(); } }
+
+        renderHistory();
+    </script>
+</body>
+</html>
